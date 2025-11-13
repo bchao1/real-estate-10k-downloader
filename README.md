@@ -6,4 +6,7 @@ wget https://storage.googleapis.com/realestate10k-public-files/RealEstate10K.tar
 tar -xzvf RealEstate10K.tar.gz
 ```
 
+## Installation
+- ffmpeg (actual one with forge)
+- ffmpeg-python
 ## Process dataset metadata

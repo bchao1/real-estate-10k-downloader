@@ -25,15 +25,22 @@ if __name__ == "__main__":
         ydl_opts = {
             'format': 'mp4',
             'outtmpl': os.path.join(args.video_folder, f'{video_id}.%(ext)s'),
+            'cookiefile': '../data/yt_cookies.txt'
         }
         url = f'https://www.youtube.com/watch?v={video_id}'
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        if os.path.exists(os.path.join(args.video_folder, f'{video_id}.mp4')):
+            print(f'Video {video_id} already exists')
+            return
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except Exception as e:
+            print(f'Failed to download {video_id}: {e}')
+            return
 
     if args.jobs <= 1:
         for video_id in video_files:
             download_video(video_id)
-            exit()
     else:
         with ThreadPoolExecutor(max_workers=args.jobs) as executor:
             futures = {

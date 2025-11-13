@@ -2,6 +2,9 @@ import argparse
 import json
 import os
 import os.path as osp
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List
+
 from tqdm import tqdm
 from moviepy import VideoFileClip
 import imageio
@@ -16,6 +19,7 @@ def get_args():
     parser.add_argument('--clip_txt_path', required=True, help='path to the downloaded realestate txt files')
     parser.add_argument('--low_idx', type=int, default=0, help='used for parallel processing')
     parser.add_argument('--high_idx', type=int, default=-1, help='used for parallel processing')
+    parser.add_argument('--jobs', type=int, default=1, help='Number of concurrent clip extraction workers.')
     return parser.parse_args()
 
 
@@ -26,27 +30,48 @@ if __name__ == '__main__':
     video_names = list(video2clips.keys())[args.low_idx: args.high_idx] if args.high_idx != -1 else list(video2clips.keys())
     video2clips = {k: v for k, v in video2clips.items() if k in video_names}
 
-    for video_name, clip_list in tqdm(video2clips.items()):
+    def process_video(video_name: str, clip_list: List[str]) -> None:
         video_path = osp.join(args.video_root, video_name + '.mp4')
         if not osp.exists(video_path):
-            continue
+            return
         video = VideoFileClip(video_path)
-        #clip_save_path = osp.join(args.save_path, video_name)
         clip_save_path = args.save_path
         os.makedirs(clip_save_path, exist_ok=True)
-        for clip in tqdm(clip_list):
+        for clip in clip_list:
             clip_save_name = clip + '.mp4'
-            if osp.exists(osp.join(clip_save_path, clip_save_name)):
+            clip_full_path = osp.join(clip_save_path, clip_save_name)
+            if osp.exists(clip_full_path):
                 continue
-            with open(osp.join(args.clip_txt_path, clip + '.txt'), 'r') as f:
+            clip_txt_file = osp.join(args.clip_txt_path, clip + '.txt')
+            if not osp.exists(clip_txt_file):
+                continue
+            with open(clip_txt_file, 'r') as f:
                 lines = f.readlines()
-            frames = [x for x in lines[1: ]]
+            frames = [x for x in lines[1:]]
+            if not frames:
+                continue
             timesteps = [int(x.split(' ')[0]) for x in frames]
             if timesteps[-1] <= timesteps[0]:
                 continue
             timestamps_seconds = [x / 1000000.0 for x in timesteps]
             frames = [video.get_frame(t) for t in timestamps_seconds]
-            print("Saving clip {} with {} frames".format(clip_save_name, len(frames)))
-            imageio.mimsave(osp.join(clip_save_path, clip_save_name), frames, fps=video.fps)
-            video_reader = VideoReader(osp.join(clip_save_path, clip_save_name))
+            imageio.mimsave(clip_full_path, frames, fps=video.fps)
+            video_reader = VideoReader(clip_full_path)
             assert len(video_reader) == len(timesteps)
+
+    items = list(video2clips.items())
+    if args.jobs <= 1:
+        for video_name, clip_list in tqdm(items):
+            process_video(video_name, clip_list)
+    else:
+        with ThreadPoolExecutor(max_workers=args.jobs) as executor:
+            futures = {
+                executor.submit(process_video, video_name, clip_list): video_name
+                for video_name, clip_list in items
+            }
+            for future in tqdm(as_completed(futures), total=len(futures)):
+                video_name = futures[future]
+                try:
+                    future.result()
+                except Exception as exc:
+                    print(f'Failed to process {video_name}: {exc}')
