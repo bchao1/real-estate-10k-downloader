@@ -14,6 +14,8 @@ if __name__ == "__main__":
         default=1,
         help='Number of concurrent downloads to run (default: 1).',
     )
+    parser.add_argument('--cookie_file', default='../yt_cookies/cookies_1.txt')
+
     args = parser.parse_args()
     with open(os.path.join(args.video_folder, 'video_files.json'), 'r') as f:
         video_files = json.load(f)
@@ -25,7 +27,7 @@ if __name__ == "__main__":
         ydl_opts = {
             'format': 'mp4',
             'outtmpl': os.path.join(args.video_folder, f'{video_id}.%(ext)s'),
-            'cookiefile': '../data/yt_cookies.txt'
+            'cookiefile': args.cookie_file
         }
         url = f'https://www.youtube.com/watch?v={video_id}'
         if os.path.exists(os.path.join(args.video_folder, f'{video_id}.mp4')):

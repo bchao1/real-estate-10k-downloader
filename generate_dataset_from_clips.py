@@ -1,77 +1,99 @@
+import cv2
 import argparse
 import json
 import random
 import os
 import os.path as osp
 import imageio
-import cv2
 import numpy as np
 from decord import VideoReader
 
 
 def get_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--save_path', required=True)
-    parser.add_argument('--clip_names', nargs='*', help='the txt file names')
-    parser.add_argument('--clip_txt_path', required=True, help='root path of downloaded realestate10k txt files')
-    parser.add_argument('--json_file', required=True, help='json file generated using generate_realestate_json.py')
-    parser.add_argument('--trajectory_names', nargs='*', help='saving names for each trajectory')
-    parser.add_argument('--sample_stride', type=int, default=4)
-    parser.add_argument('--num_frames', type=int, default=)
-    parser.add_argument('--video_width', type=int, default=384)
-    parser.add_argument('--video_height', type=int, default=256)
+    parser.add_argument('--selected_clips_folder', required=True)
+    parser.add_argument('--clips_folder', required=True)
+    parser.add_argument('--clip_txt_folder', required=True)
+    parser.add_argument('--sample_stride', type=int, default=1)
+    parser.add_argument('--num_frames', type=int, default=81)
+    parser.add_argument('--video_width', type=int, default=832)
+    parser.add_argument('--video_height', type=int, default=480)
     parser.add_argument('--save_images', action='store_true')
 
     return parser.parse_args()
 
 
-def camera_ctrl_data_func():
-    args = get_args()
-    os.makedirs(args.save_path, exist_ok=True)
-    os.makedirs(osp.join(args.save_path, 'selected_pose_files'), exist_ok=True)
-    os.makedirs(osp.join(args.save_path, 'selected_clips'), exist_ok=True)
-    if args.save_images:
-        os.makedirs(osp.join(args.save_path, 'selected_images'), exist_ok=True)
-    clip_infos = json.load(open(args.json_file, 'r'))
-    clip_name2clip_info = {x['clip_name']: x for x in clip_infos}
-    clip_name2clip_info = {x: clip_name2clip_info[x] for x in args.clip_names}
-    selected_clip_infos = []
-    trajectory_names = args.clip_names if args.trajectory_names is None else args.trajectory_names
-    for clip_info, trajectory_name in zip(clip_name2clip_info.values(), trajectory_names):
-        pose_file = osp.join(args.clip_txt_path, clip_info['pose_file'])
-        with open(pose_file, 'r') as f:
-            poses = f.readlines()
-        html = poses[0].strip()
-        poses = [x.strip() for x in poses[1:]]
-        total_frames = len(poses)
-        cropped_length = args.num_frames * args.sample_stride
-        start_frame_ind = random.randint(0, max(0, total_frames - cropped_length - 1))
-        end_frame_ind = min(start_frame_ind + cropped_length, total_frames)
-        assert end_frame_ind - start_frame_ind >= args.num_frames
-        frame_ind = np.linspace(start_frame_ind, end_frame_ind - 1, args.num_frames, dtype=int)
-        poses = [html, ] + [poses[ind] for ind in frame_ind]
-        pose_save_file = osp.join(args.save_path, 'selected_pose_files', trajectory_name + '.txt')
-        with open(pose_save_file, 'w') as f:
-            for pose in poses:
-                f.write(pose + '\n')
-        clip_file = osp.join(args.clip_txt_path, clip_info['clip_path'])
-        video_reader = VideoReader(clip_file)
-        video_batch = video_reader.get_batch(frame_ind).asnumpy()
-        video_batch = [cv2.resize(x, dsize=(args.video_width, args.video_height)) for x in video_batch]
-        clip_save_file = osp.join(args.save_path, 'selected_clips', trajectory_name + '.mp4')
-        imageio.mimsave(clip_save_file, video_batch, fps=8)
-        selected_clip_infos.append({'clip_name': clip_info['clip_name'], 'caption': clip_info['caption'],
-                                    'clip_path': clip_save_file, 'pose_file': pose_save_file,
-                                    'trajectory_name': trajectory_name})
-        if args.save_images:
-            images_save_path = osp.join(args.save_path, 'selected_images', trajectory_name)
-            os.makedirs(images_save_path, exist_ok=True)
-            for image_idx, image in zip(frame_ind, video_batch):
-                image_save_path = osp.join(images_save_path, f'{image_idx}.jpg')
-                cv2.imwrite(image_save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
-            selected_clip_infos[-1].update({'images_save_path': images_save_path})
-    with open(osp.join(args.save_path, 'selected_clip_infos.json'), 'w') as f:
-        json.dump(selected_clip_infos, fp=f)
+def read_clip_txt(clip_txt_folder, clip_id):
+    camera_extrinsics = []
+    camera_intrinsics = []
+
+    with open(os.path.join(clip_txt_folder, f"{clip_id}.txt"), "r") as f:
+        for line in f:
+            tokens = line.strip().split(' ')
+            if len(tokens) > 1:  # extrinsics lines
+                tokens = [float(x) for x in tokens[1:]]  # ignore first timestep token
+                # 18 tokens in total. 4 for intrinsics,
+                intrinsics = tokens[:4]
+                extrinsics = tokens[-12:]
+                camera_extrinsics.append(extrinsics)
+                camera_intrinsics.append(intrinsics)
+
+    return camera_extrinsics, camera_intrinsics
+
 
 if __name__ == '__main__':
-    pass
+    args = get_args()
+
+    # make dirs for selected clips
+    os.makedirs(args.selected_clips_folder, exist_ok=True)
+    os.makedirs(osp.join(args.selected_clips_folder, 'selected_poses'), exist_ok=True)
+    os.makedirs(osp.join(args.selected_clips_folder, 'selected_clips'), exist_ok=True)
+    if args.save_images:
+        os.makedirs(osp.join(args.selected_clips_folder, 'selected_images'), exist_ok=True)
+
+    # processing
+    clip_file_names = os.listdir(args.clips_folder)
+    print(f"Processing {len(clip_file_names)} clips")
+    for clip_file_name in tqdm(clip_file_names):
+        clip_id = clip_file_name.split(".")[0]
+        video_reader = VideoReader(os.path.join(args.clips_folder, clip_file_name))
+        camera_extrinsics, camera_intrinsics = read_clip_txt(args.clip_txt_folder, clip_id)
+
+        assert len(camera_extrinsics) == len(camera_intrinsics) == len(video_reader), \
+            "Number of camera extrinsics and intrinsics must match number of frames in video"
+
+        # sample frame indices
+        total_frames = len(video_reader)
+        cropped_length = args.num_frames * args.sample_stride
+        start_frame_idx = random.randint(0, max(0, total_frames - cropped_length - 1))
+        end_frame_idx = min(start_frame_idx + cropped_length, total_frames)
+        assert end_frame_idx - start_frame_idx >= args.num_frames
+
+        frame_indices = np.linspace(start_frame_idx, end_frame_idx - 1, args.num_frames, dtype=int)
+
+        # write selected poses
+        with open(osp.join(args.selected_clips_folder, 'selected_poses', f'{clip_id}.txt'), 'w') as f:
+            for frame_idx in frame_indices:
+                poses_info = camera_intrinsics[frame_idx] + camera_extrinsics[frame_idx]
+                f.write(' '.join([str(x) for x in poses_info]) + '\n')
+
+        # write selected clips and images
+        video_batch = video_reader.get_batch(frame_indices).asnumpy()
+        video_batch = [cv2.resize(x, dsize=(args.video_width, args.video_height)) for x in video_batch]
+
+        imageio.mimsave(
+            osp.join(args.selected_clips_folder, 'selected_clips', f'{clip_id}.mp4'),
+            video_batch,
+            fps=8
+        )
+
+        if args.save_images:
+            os.makedirs(osp.join(args.selected_clips_folder, 'selected_images', clip_id), exist_ok=True)
+            for image_idx, image in zip(frame_indices, video_batch):
+                image_save_path = osp.join(
+                    args.selected_clips_folder,
+                    'selected_images',
+                    clip_id,
+                    f'{str(image_idx).zfill(6)}.jpg'
+                )
+                cv2.imwrite(image_save_path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
