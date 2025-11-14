@@ -1,3 +1,12 @@
+# Download videos
+python download_videos.py \
+    --video_folder /scratch/m000051/brian/data/real_estate_10k/train_videos/ \
+    --jobs 8 \
+    --cookie_file ../yt_cookies/cookies_2.txt
+
+exit
+
+# Generate dataset from clips
 python generate_dataset_from_clips.py \
     --selected_clips_folder /miele/brian/data/real_estate_10k/sampled_dataset \
     --clips_folder /miele/brian/data/real_estate_10k/train_clips \
